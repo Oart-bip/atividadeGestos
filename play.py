@@ -1,14 +1,11 @@
-
 """
-Passo 3 - Jogo Pedra, Papel e Tesoura contra o computador.
+Passo 3 (Libras) - Reconhecimento de sinais de Libras em tempo real.
 Uso: python play.py
-ESPACO = nova rodada (contagem 3-2-1, depois o modelo "le" sua mao)
+Coloque a mao dentro do quadrado verde; o modelo mostra o sinal que reconhece.
 q = sair
 """
 
 import json
-import random
-import time
 from collections import Counter, deque
 
 import cv2
@@ -16,17 +13,13 @@ import numpy as np
 import tensorflow as tf
 
 IMG_SIZE = 224
+NONE_CLASS = "nada"
+CONF_MIN = 0.60  # abaixo disso o modelo "nao tem certeza" e mostramos "?"
 
 model = tf.keras.models.load_model("gesture_model.keras")
-class_names = json.load(open("class_names.json"))
 
-BEATS = {
-    "pedra": "tesoura",
-    "papel": "pedra",
-    "tesoura": "papel"
-}  # chave vence valor
-
-MOVES = ["pedra", "papel", "tesoura"]
+with open("class_names.json") as f:
+    class_names = json.load(f)
 
 
 def predict(roi):
@@ -35,10 +28,10 @@ def predict(roi):
         cv2.COLOR_BGR2RGB
     )
 
-    probs = model.predict(
+    probs = model(
         img[None].astype("float32"),
-        verbose=0
-    )[0]
+        training=False
+    ).numpy()[0]
 
     return (
         class_names[int(np.argmax(probs))],
@@ -53,19 +46,6 @@ if not cap.isOpened():
     raise SystemExit("Nao consegui abrir a webcam.")
 
 recent = deque(maxlen=7)  # suaviza: voto da maioria nos ultimos frames
-
-score = {
-    "voce": 0,
-    "pc": 0,
-    "empates": 0
-}
-
-state, t0, message, pc_move = (
-    "idle",
-    0,
-    "Aperte ESPACO para jogar",
-    None
-)
 
 while True:
     ok, frame = cap.read()
@@ -82,45 +62,24 @@ while True:
     roi = frame[y1:y1 + side, x1:x1 + side]
 
     label, conf, probs = predict(roi)
-    recent.append(label)
+    recent.append(label if conf >= CONF_MIN else "?")
     stable = Counter(recent).most_common(1)[0][0]
 
-    if state == "count":
-        left = 3 - int(time.time() - t0)
-
-        if left <= 0:
-            you = stable
-
-            if you not in MOVES:
-                message = "Nao vi sua mao! Tente de novo"
-            else:
-                pc_move = random.choice(MOVES)
-
-                if you == pc_move:
-                    score["empates"] += 1
-                    message = f"Empate! PC: {pc_move}"
-
-                elif BEATS[you] == pc_move:
-                    score["voce"] += 1
-                    message = f"Voce ganhou! ({you} x {pc_move})"
-
-                else:
-                    score["pc"] += 1
-                    message = f"PC ganhou! ({you} x {pc_move})"
-
-            state, t0 = "result", time.time()
-
-        else:
-            message = f"{left}..."
-
-    elif state == "result" and time.time() - t0 > 3:
-        state = "idle"
+    if stable == NONE_CLASS:
+        big, color = "-", (180, 180, 180)
+        message = "Nenhum sinal"
+    elif stable == "?":
+        big, color = "?", (0, 165, 255)
+        message = "Nao tenho certeza"
+    else:
+        big, color = stable, (0, 255, 0)
+        message = f"Sinal: {stable}"
 
     cv2.rectangle(
         frame,
         (x1, y1),
         (x1 + side, y1 + side),
-        (0, 255, 0),
+        color,
         3
     )
 
@@ -134,7 +93,7 @@ while True:
         2
     )
 
-    # barras de probabilidade (otimo para mostrar a "incerteza" do modelo)
+    # barras de probabilidade (mostram a "incerteza" do modelo)
     for i, c in enumerate(class_names):
         bw = int(probs[i] * 150)
 
@@ -156,36 +115,33 @@ while True:
             1
         )
 
+    # letra reconhecida em destaque (canto direito)
+    cv2.putText(
+        frame,
+        big,
+        (w - 140, 120),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        4.0,
+        color,
+        8
+    )
+
     cv2.putText(
         frame,
         message,
-        (10, h - 50),
+        (10, h - 20),
         cv2.FONT_HERSHEY_SIMPLEX,
         1.0,
-        (0, 255, 0),
+        color,
         3
     )
 
-    cv2.putText(
-        frame,
-        f"Voce {score['voce']} x {score['pc']} PC "
-        f"(empates: {score['empates']})",
-        (10, h - 15),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2
-    )
-
-    cv2.imshow("Pedra, Papel e Tesoura com CNN", frame)
+    cv2.imshow("Libras - reconhecimento de sinais", frame)
 
     key = cv2.waitKey(1) & 0xFF
 
     if key == ord("q"):
         break
-
-    if key == 32 and state == "idle":
-        state, t0 = "count", time.time()
 
 cap.release()
 cv2.destroyAllWindows()
